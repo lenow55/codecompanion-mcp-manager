@@ -16,6 +16,9 @@ local current_opts = {
 		list_servers = {},
 		enable_server = {},
 		disable_server = {},
+		list_tool_groups = {},
+		enable_tool_group = {},
+		disable_tool_group = {},
 	},
 	collapse_tools = true,
 }
@@ -71,7 +74,7 @@ function Extension.setup(opts)
 	tools_config.groups["auto_mcp"] = {
 		opts = { collapse_tools = current_opts.collapse_tools },
 		tools = tool_group,
-		description = "Tools that expose the MCP server lifecycle to the LLM.",
+		description = "Tools that expose the MCP server lifecycle and tool group management to the LLM.",
 	}
 end
 
