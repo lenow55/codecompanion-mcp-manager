@@ -84,49 +84,33 @@ function M.list_tool_groups()
 						g.attached = chat.tool_registry.groups[name] ~= nil
 					end
 				end
-				local rows = { { "group", "tools", "attached", "description" } }
 				local names = vim.tbl_keys(groups)
 				table.sort(names)
+				local blocks = {}
 				for _, name in ipairs(names) do
 					local g = groups[name]
 					local tool_names = g.tools or {}
 					table.sort(tool_names)
-					table.insert(rows, {
-						name,
-						tostring(#tool_names),
-						tostring(g.attached or false),
-						g.description or "",
-					})
-				end
-				local widths = {}
-				for _, row in ipairs(rows) do
-					for i, cell in ipairs(row) do
-						widths[i] = math.max(widths[i] or 0, #cell)
+					local lines = {
+						"---",
+						string.format("name: %s", name),
+						string.format("attached: %s", tostring(g.attached or false)),
+						string.format("description: %s", g.description or ""),
+						"tools:",
+					}
+					for _, tn in ipairs(tool_names) do
+						table.insert(lines, string.format("- %s", tn))
 					end
+					table.insert(blocks, table.concat(lines, "\n"))
 				end
-				local lines = {}
-				for r, row in ipairs(rows) do
-					local cells = {}
-					for i, cell in ipairs(row) do
-						table.insert(cells, cell .. string.rep(" ", widths[i] - #cell))
-					end
-					table.insert(lines, "| " .. table.concat(cells, " | ") .. " |")
-					if r == 1 then
-						local sep = {}
-						for i = 1, #widths do
-							table.insert(sep, string.rep("-", widths[i]))
-						end
-						table.insert(lines, "| " .. table.concat(sep, " | ") .. " |")
-					end
-				end
-				return { status = "success", data = table.concat(lines, "\n") }
+				return { status = "success", data = table.concat(blocks, "\n") }
 			end,
 		},
 		schema = {
 			type = "function",
 			["function"] = {
 				name = "mcp_list_tool_groups",
-				description = "List all tool groups available in the CodeCompanion config. Returns one row per group with `group` (name), `tools` (count of tools in the group), `attached` (whether the group is currently attached to this chat), and `description`. Call this before `mcp_enable_tool_group` or `mcp_disable_tool_group` to discover valid group names.",
+				description = "List all tool groups available in the CodeCompanion config. Returns one block per group with `name`, `attached` (whether the group is currently attached to this chat), `description`, and a `tools` list of tool names. Call this before `mcp_enable_tool_group` or `mcp_disable_tool_group` to discover valid group names.",
 				parameters = {
 					type = "object",
 					properties = {},
