@@ -27,10 +27,10 @@ the chat.
 
 The six tools are organized into two categories:
 
-| Category          | Tools                                                                          |
-|-------------------|--------------------------------------------------------------------------------|
-| **MCP server lifecycle** | `mcp_list_servers`, `mcp_enable_server`, `mcp_disable_server`           |
-| **Tool group management**| `mcp_list_tool_groups`, `mcp_enable_tool_group`, `mcp_disable_tool_group`|
+| Category                  | Tools                                                                     |
+| ------------------------- | ------------------------------------------------------------------------- |
+| **MCP server lifecycle**  | `mcp_list_servers`, `mcp_enable_server`, `mcp_disable_server`             |
+| **Tool group management** | `mcp_list_tool_groups`, `mcp_enable_tool_group`, `mcp_disable_tool_group` |
 
 The server lifecycle tools start/stop MCP server **processes** and
 automatically attach/detach the server's tool group. The group management
@@ -40,12 +40,14 @@ existing groups without starting or stopping any server process.
 ## Available Tools
 
 ### `mcp_list_servers`
+
 - **No parameters.**
 - Returns a markdown table: `name | started | ready | tools | default`.
 - Always call this first to discover valid server names before using
   `mcp_enable_server` or `mcp_disable_server`.
 
 ### `mcp_enable_server`
+
 - **Parameters:** `name` (string, required).
 - Starts the MCP server process if not already running.
 - Registers the server's tools into the current chat via `tool_registry:add_group`.
@@ -54,6 +56,7 @@ existing groups without starting or stopping any server process.
   in the same response.
 
 ### `mcp_disable_server`
+
 - **Parameters:** `name` (string, required).
 - Stops the MCP server process.
 - Removes the server's tool group from the current chat via `tool_registry:remove_group`.
@@ -61,6 +64,7 @@ existing groups without starting or stopping any server process.
   of this chat.
 
 ### `mcp_list_tool_groups`
+
 - **No parameters.**
 - Returns a markdown table: `group | tools | attached | description`.
 - Lists **all** groups configured in `config.interactions.chat.tools.groups`,
@@ -72,6 +76,7 @@ existing groups without starting or stopping any server process.
   status before using `mcp_enable_tool_group` or `mcp_disable_tool_group`.
 
 ### `mcp_enable_tool_group`
+
 - **Parameters:** `name` (string, required).
 - Attaches an existing tool group to the current chat via
   `tool_registry:add_group`.
@@ -83,6 +88,7 @@ existing groups without starting or stopping any server process.
   turn**. Do not attempt to invoke them in the same response.
 
 ### `mcp_disable_tool_group`
+
 - **Parameters:** `name` (string, required).
 - Detaches a tool group from the current chat via
   `tool_registry:remove_group`.
@@ -100,23 +106,23 @@ Use these tools when the user asks to:
 
 2. **"Enable/attach the `<name>` tools" / "Add `<name>` tools to this chat"**
    → If `<name>` is an MCP server: use `mcp_enable_server` (starts process +
-     attaches group).
+   attaches group).
    → If `<name>` is a configured group: use `mcp_enable_tool_group` (attaches
-     group only, no process management).
+   group only, no process management).
    → When unsure which to use: call `mcp_list_tool_groups` first to check
-     options.
+   options.
 
 3. **"Disable/detach the `<name>` tools" / "Remove `<name>` tools from chat"**
    → If the user wants to stop the server entirely: use `mcp_disable_server`.
    → If the user only wants to remove the group from one chat: use
-     `mcp_disable_tool_group`.
+   `mcp_disable_tool_group`.
 
 4. **"Which MCP servers are running?" / "Status of MCP servers?"**
    → Call `mcp_list_servers`.
 
 5. **"I don't need `<name>` anymore" / "Clean up unused tools"**
    → Call `mcp_disable_tool_group` for each unwanted group, then
-     `mcp_disable_server` if the server process should also be stopped.
+   `mcp_disable_server` if the server process should also be stopped.
 
 ## Scenarios
 
@@ -214,21 +220,12 @@ Report the error to the user and list the valid group names.
    `tool_registry`. If the server process is stopped, its group config may
    still exist but the tools won't function when called.
 
-4. **One chat at a time.** Groups are attached per-chat. Attaching a group
-   in one chat does not affect other chats. If the user has multiple chats
-   open, group attachment state is independent.
-
-5. **No duplicate attachment.** If a group is already attached,
+4. **No duplicate attachment.** If a group is already attached,
    `mcp_enable_tool_group` returns a success message ("already attached")
    rather than an error. Similarly, `mcp_enable_server` checks if the group
    is already registered before attaching.
 
-6. **Detaching is irreversible within a chat session.** Once detached, the
+5. **Detaching is irreversible within a chat session.** Once detached, the
    group's tools are immediately removed from the chat. Previous tool call
    results in the conversation history are preserved, but the tools can no
    longer be invoked unless re-attached.
-
-7. **Existing groups only.** `mcp_enable_tool_group` can only attach groups
-   that are already defined in `config.interactions.chat.tools.groups`. It
-   cannot create new groups or register new tools. Group definitions are
-   created by `mcp_enable_server` (for MCP servers) or by the user's config.
