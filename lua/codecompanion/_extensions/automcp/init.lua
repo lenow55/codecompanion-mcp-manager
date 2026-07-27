@@ -5,19 +5,16 @@ local log = require("codecompanion.utils.log")
 ---@class CodeCompanionMcpManager.ToolOpts
 ---@field requires_approval? boolean Deprecated: use `require_approval_before` instead
 ---@field require_approval_before? boolean|fun(self: table, tools: table): boolean Ask for user approval before the tool runs
----@field no_approval_for? string[] Names of MCP servers or tool groups that bypass approval for this tool only
+---@field no_approval_for? string[] Names of tool groups that bypass approval for this tool only
 
 ---@class CodeCompanionMcpManager.Opts
 ---@field tool_opts? table<string, CodeCompanionMcpManager.ToolOpts> Per-tool options, keyed by tool name without the `mcp_` prefix
 ---@field collapse_tools? boolean Collapse the tools into a single group in the chat buffer
----@field no_approval_for? string[] Names of MCP servers or tool groups that bypass approval for every name-based lifecycle/group tool
+---@field no_approval_for? string[] Names of tool groups that bypass approval for every name-based group tool
 
 ---@type CodeCompanionMcpManager.Opts
 local current_opts = {
 	tool_opts = {
-		list_servers = {},
-		enable_server = {},
-		disable_server = {},
 		list_tool_groups = {},
 		enable_tool_group = {},
 		disable_tool_group = {},
@@ -41,11 +38,9 @@ function Extension.setup(opts)
 	local tools = require("codecompanion._extensions.automcp.tools")
 	local tools_config = require("codecompanion.config").interactions.chat.tools
 
-	-- Tools that take a `name` argument (an MCP server or tool group name) and
+	-- Tools that take a `name` argument (a tool group name) and
 	-- therefore respect the `no_approval_for` allow-list.
 	local NAME_BASED_TOOLS = {
-		enable_server = true,
-		disable_server = true,
 		enable_tool_group = true,
 		disable_tool_group = true,
 	}

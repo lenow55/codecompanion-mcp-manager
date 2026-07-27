@@ -5,7 +5,7 @@
 --
 -- The test mocks the required CodeCompanion modules (config, log, mcp) and
 -- verifies that:
---   1. `setup()` registers all three tools under keys matching their schema names
+--   1. `setup()` registers all tool group tools under keys matching their schema names
 --   2. each `callback` is a factory returning a valid tool definition
 --   3. the `auto_mcp` group is created with the registered tools
 --   4. per-tool `require_approval_before` options are applied
@@ -30,7 +30,7 @@ local config_store = {
 			},
 		},
 	},
-	mcp = { servers = { testserver = { cmd = { "echo" } } } },
+	mcp = { servers = {} },
 }
 
 package.preload["codecompanion.config"] = function()
@@ -58,15 +58,6 @@ package.preload["codecompanion.mcp"] = function()
 		tool_prefix = function()
 			return "mcp:"
 		end,
-		get_status = function()
-			return { testserver = { started = false, ready = false, tool_count = 0, default = false } }
-		end,
-		enable_server = function(name, opts)
-			return true, true
-		end,
-		disable_server = function(name)
-			return true, false
-		end,
 	}
 end
 
@@ -74,15 +65,12 @@ end
 
 local ext = require("codecompanion._extensions.automcp")
 assert(type(ext) == "table" and type(ext.setup) == "function", "extension must expose setup()")
-ext.setup({ tool_opts = { enable_server = { require_approval_before = true } } })
+ext.setup({ tool_opts = { enable_tool_group = { require_approval_before = true } } })
 
 -- 2. Verify tools were registered under names matching their schema names -----
 
 local tools_config = config_store.interactions.chat.tools
 for _, name in ipairs({
-	"mcp_list_servers",
-	"mcp_enable_server",
-	"mcp_disable_server",
 	"mcp_list_tool_groups",
 	"mcp_enable_tool_group",
 	"mcp_disable_tool_group",
@@ -97,43 +85,18 @@ for _, name in ipairs({
 	assert(type(tool.output.error) == "function", "tool must have output.error: " .. name)
 	assert(type(tool.output.prompt) == "function", "tool must have output.prompt: " .. name)
 end
-assert(tools_config.mcp_enable_server.opts.require_approval_before == true, "approval opt not applied")
-assert(tools_config.mcp_list_servers.opts.require_approval_before == nil, "approval should be unset by default")
+assert(tools_config.mcp_enable_tool_group.opts.require_approval_before == true, "approval opt not applied")
+assert(tools_config.mcp_list_tool_groups.opts.require_approval_before == nil, "approval should be unset by default")
 
 -- 3. Verify group --------------------------------------------------------------
 
 local group = tools_config.groups.auto_mcp
 assert(group, "auto_mcp group missing")
-assert(#group.tools == 6, "group should contain 6 tools")
+assert(#group.tools == 3, "group should contain 3 tools")
 assert(group.opts.collapse_tools == true, "group collapse_tools")
 
--- 4. Run list_servers cmd with a mocked Tools object ----------------------------
+-- 4. Run list_tool_groups cmd ---------------------------------------------------
 
-local tool = tools_config.mcp_list_servers.callback()
-local result = tool.cmds[1]({ chat = nil }, {}, {})
-assert(result.status == "success" and result.data:match("testserver"), "list_servers should return a server table")
-
--- 5. Run enable_server cmd (validation path + success path) ---------------------
-
-local enable = tools_config.mcp_enable_server.callback()
-local bad = enable.cmds[1]({ chat = nil }, { name = "nope" }, {})
-assert(bad.status == "error", "enable_server should reject unknown servers")
-local missing = enable.cmds[1]({ chat = nil }, {}, {})
-assert(missing.status == "error", "enable_server should require the `name` argument")
-local good = enable.cmds[1]({ chat = nil }, { name = "testserver" }, {})
-assert(good.status == "success" and good.data:match("enabled"), "enable_server should succeed")
-
--- 6. Run disable_server cmd ------------------------------------------------------
-
-local disable = tools_config.mcp_disable_server.callback()
-local dis_bad = disable.cmds[1]({ chat = nil }, { name = "nope" }, {})
-assert(dis_bad.status == "error", "disable_server should reject unknown servers")
-local dis = disable.cmds[1]({ chat = nil }, { name = "testserver" }, {})
-assert(dis.status == "success" and dis.data:match("disabled"), "disable_server should succeed")
-
--- 7. Run list_tool_groups cmd ---------------------------------------------------
-
---- Build a mock chat with a tool_registry that records attach/detach calls.
 ---@param attached_groups table<string, true> Group names already in tool_registry
 local function mock_chat_with_registry(attached_groups)
 	local added = {}
@@ -172,7 +135,7 @@ local ltg_attached = list_tool_groups.cmds[1]({ chat = chat_attached }, {}, {})
 assert(ltg_attached.status == "success", "list_tool_groups should succeed with chat")
 assert(ltg_attached.data:match("true"), "list_tool_groups should show true for attached testgroup")
 
--- 8. Run enable_tool_group cmd (validation + success + already-attached) ---------
+-- 5. Run enable_tool_group cmd (validation + success + already-attached) ---------
 
 local enable_tg = tools_config.mcp_enable_tool_group.callback()
 
@@ -196,7 +159,7 @@ local etg_good = enable_tg.cmds[1]({ chat = chat_clean }, { name = "testgroup" }
 assert(etg_good.status == "success" and etg_good.data:match("attached"), "enable_tool_group should succeed and attach")
 assert(chat_clean.tool_registry._in_added["testgroup"], "add_group should have been called for testgroup")
 
--- 9. Run disable_tool_group cmd (validation + success) ---------------------------
+-- 6. Run disable_tool_group cmd (validation + success) ---------------------------
 
 local disable_tg = tools_config.mcp_disable_tool_group.callback()
 
@@ -213,7 +176,7 @@ local dtg_good = disable_tg.cmds[1]({ chat = chat_attached }, { name = "testgrou
 assert(dtg_good.status == "success" and dtg_good.data:match("detached"), "disable_tool_group should succeed and detach")
 assert(chat_attached.tool_registry._in_removed["testgroup"], "remove_group should have been called for testgroup")
 
--- 10. no_approval_for allow-list --------------------------------------------------
+-- 7. no_approval_for allow-list --------------------------------------------------
 
 -- Re-require the extension to reset module-level `current_opts` so the
 -- second setup() starts from defaults rather than merging on top of the
@@ -222,18 +185,17 @@ package.loaded["codecompanion._extensions.automcp"] = nil
 local ext2 = require("codecompanion._extensions.automcp")
 
 ext2.setup({
-	-- Global allow-list applies to every name-based lifecycle/group tool.
-	no_approval_for = { "testserver" },
+	-- Global allow-list applies to every name-based group tool.
+	no_approval_for = { "testgroup" },
 	tool_opts = {
-		enable_server = {
+		enable_tool_group = {
 			require_approval_before = true,
 			-- Per-tool allow-list is merged on top of the global one.
-			no_approval_for = { "safe-server" },
+			no_approval_for = { "safe-group" },
 		},
-		disable_server = {
+		disable_tool_group = {
 			require_approval_before = true,
 		},
-		disable_tool_group = {}, -- no base approval; only the allow-list matters
 	},
 })
 
@@ -241,28 +203,16 @@ local tools_config2 = config_store.interactions.chat.tools
 
 -- Name-based tools get a function gate when an allow-list is in effect.
 assert(
-	type(tools_config2.mcp_enable_server.opts.require_approval_before) == "function",
-	"enable_server should wrap approval in a function when no_approval_for is set"
-)
-assert(
-	type(tools_config2.mcp_disable_server.opts.require_approval_before) == "function",
-	"disable_server should wrap approval in a function when no_approval_for is set"
+	type(tools_config2.mcp_enable_tool_group.opts.require_approval_before) == "function",
+	"enable_tool_group should wrap approval in a function when no_approval_for is set"
 )
 assert(
 	type(tools_config2.mcp_disable_tool_group.opts.require_approval_before) == "function",
 	"disable_tool_group should wrap approval in a function when no_approval_for is set"
 )
-assert(
-	type(tools_config2.mcp_enable_tool_group.opts.require_approval_before) == "function",
-	"enable_tool_group should wrap approval in a function when no_approval_for is set"
-)
 
 -- Non-name-based tools are unaffected by the allow-list and keep their base
 -- value (nil here → no approval).
-assert(
-	tools_config2.mcp_list_servers.opts.require_approval_before == nil,
-	"list_servers should be unaffected by no_approval_for"
-)
 assert(
 	tools_config2.mcp_list_tool_groups.opts.require_approval_before == nil,
 	"list_tool_groups should be unaffected by no_approval_for"
@@ -272,21 +222,14 @@ local function call_approval(tool_cfg, name)
 	return tool_cfg.opts.require_approval_before({ args = name and { name = name } or {} }, nil)
 end
 
-local es = tools_config2.mcp_enable_server
-assert(call_approval(es, "testserver") == false, "global no_approval_for should bypass testserver")
-assert(call_approval(es, "safe-server") == false, "per-tool no_approval_for should bypass safe-server")
-assert(call_approval(es, "other") == true, "non-whitelisted name should fall back to base require_approval_before")
-assert(call_approval(es, nil) == true, "missing name should fall back to base require_approval_before")
+local etg = tools_config2.mcp_enable_tool_group
+assert(call_approval(etg, "testgroup") == false, "global no_approval_for should bypass testgroup")
+assert(call_approval(etg, "safe-group") == false, "per-tool no_approval_for should bypass safe-group")
+assert(call_approval(etg, "other") == true, "non-whitelisted name should fall back to base require_approval_before")
+assert(call_approval(etg, nil) == true, "missing name should fall back to base require_approval_before")
 
-local ds = tools_config2.mcp_disable_server
-assert(call_approval(ds, "testserver") == false, "global no_approval_for should bypass testserver for disable_server")
-assert(call_approval(ds, "other") == true, "non-whitelisted name should require approval for disable_server")
-
--- A tool with no base `require_approval_before` but subject to the allow-list
--- should still let whitelisted names bypass (return false) while every other
--- name falls through to the (nil) base → falsy → no approval.
-local dtg = tools_config2.mcp_disable_tool_group
-assert(call_approval(dtg, "testserver") == false, "global no_approval_for should bypass testserver for disable_tool_group")
-assert(call_approval(dtg, "other") == nil, "disable_tool_group should have no base approval for other names")
+local dtg2 = tools_config2.mcp_disable_tool_group
+assert(call_approval(dtg2, "testgroup") == false, "global no_approval_for should bypass testgroup for disable_tool_group")
+assert(call_approval(dtg2, "other") == true, "non-whitelisted name should require approval for disable_tool_group")
 
 print("ALL TESTS PASSED")
