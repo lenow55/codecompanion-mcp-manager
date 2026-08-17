@@ -114,7 +114,7 @@ function M.list_tool_groups()
 				parameters = {
 					type = "object",
 					properties = vim.empty_dict(),
-					required = vim.empty_list(),
+					required = {},
 					additionalProperties = false,
 				},
 				strict = true,
