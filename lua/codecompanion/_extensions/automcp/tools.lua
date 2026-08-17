@@ -113,8 +113,8 @@ function M.list_tool_groups()
 				description = "List all tool groups available in the CodeCompanion config. Returns one block per group with `name`, `attached` (whether the group is currently attached to this chat), `description`, and a `tools` list of tool names. Call this before `mcp_enable_tool_group` or `mcp_disable_tool_group` to discover valid group names.",
 				parameters = {
 					type = "object",
-					properties = {},
-					required = {},
+					properties = vim.empty_dict(),
+					required = vim.empty_dict(),
 					additionalProperties = false,
 				},
 				strict = true,
