@@ -17,7 +17,7 @@
 по имени, а тип (`group` или `tool`) и описание читает из `list_tools`.
 
 Подробнее о том, как LLM должен работать с этими тулами, — в
-[`mcp-tool-group-management.md`](./mcp-tool-group-management.md) (skill для LLM).
+[`tool-group-management.md`](./tool-group-management.md) (skill для LLM).
 
 ## Установка
 
