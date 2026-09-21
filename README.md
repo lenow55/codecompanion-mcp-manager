@@ -33,7 +33,7 @@ CodeCompanion передаёт в `setup()` расширения:
   },
   opts = {
     extensions = {
-      automcp = {
+      auto_tools = {
         opts = {
           collapse_tools = true,
           individual_tools = { "subagents_*" },
@@ -50,7 +50,7 @@ CodeCompanion передаёт в `setup()` расширения:
 ````
 
 > **Важно:** опции без обёртки `opts` (например,
-> `extensions = { automcp = { collapse_tools = true } }`) молча не применятся —
+> `extensions = { auto_tools = { collapse_tools = true } }`) молча не применятся —
 > `setup()` расширения получит пустую таблицу и будут использованы значения
 > по умолчанию.
 
@@ -127,7 +127,7 @@ CodeCompanion передаёт в `setup()` расширения:
 ````lua
 require("codecompanion").setup({
   extensions = {
-    automcp = {
+    auto_tools = {
       opts = {
         -- Отдельные тулы, которые можно включать по одному (глобы)
         individual_tools = { "subagents_*", "memory" },
@@ -181,7 +181,7 @@ CodeCompanion (под ключами, совпадающими с их schema-и
 ````lua
 require("codecompanion").setup({
   extensions = {
-    automcp = {
+    auto_tools = {
       opts = {
         tool_opts = {
           list_tools = {
@@ -197,5 +197,5 @@ require("codecompanion").setup({
 ## Тесты
 
 ````sh
-nvim --headless --noplugin -u NONE -c "set rtp+=." -c "luafile tests/test_automcp.lua" -c "qa!"
+nvim --headless --noplugin -u NONE -c "set rtp+=." -c "luafile tests/test_auto_tools.lua" -c "qa!"
 ````

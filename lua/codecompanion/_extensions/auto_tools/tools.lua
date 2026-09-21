@@ -73,7 +73,7 @@ end
 
 ---@return table
 local function get_opts()
-	return require("codecompanion._extensions.automcp").opts()
+	return require("codecompanion._extensions.auto_tools").opts()
 end
 
 ---@return table
@@ -175,7 +175,7 @@ local function attach_group(chat, group_name)
 		return false
 	end
 	local added = chat.tool_registry:add_group(group_name, { config = tools_config })
-	log:debug("[automcp] attached tool group `%s` to chat %s", group_name, tostring(chat.id))
+	log:debug("[auto_tools] attached tool group `%s` to chat %s", group_name, tostring(chat.id))
 	return added ~= nil
 end
 
@@ -188,7 +188,7 @@ local function attach_tool(chat, tool_name)
 	end
 	local tools_config = get_tools_config()
 	local added = chat.tool_registry:add_single_tool(tool_name, { config = tools_config[tool_name] })
-	log:debug("[automcp] attached individual tool `%s` to chat %s", tool_name, tostring(chat.id))
+	log:debug("[auto_tools] attached individual tool `%s` to chat %s", tool_name, tostring(chat.id))
 	return added ~= nil
 end
 
@@ -203,7 +203,7 @@ local function detach_group(chat, group_name)
 		return false
 	end
 	chat.tool_registry:remove_group(group_name)
-	log:debug("[automcp] detached tool group `%s` from chat %s", group_name, tostring(chat.id))
+	log:debug("[auto_tools] detached tool group `%s` from chat %s", group_name, tostring(chat.id))
 	return true
 end
 
@@ -444,7 +444,7 @@ function M.disable_tool()
 					return { status = "error", data = fmt("`%s` is not enabled in this chat.", name) }
 				end
 
-				log:warn("[automcp] cannot disable individual tool `%s`; leaving it enabled", name)
+				log:warn("[auto_tools] cannot disable individual tool `%s`; leaving it enabled", name)
 				vim.notify(
 					fmt("Individual tool `%s` cannot be disabled and stays enabled in this chat.", name),
 					vim.log.levels.WARN,

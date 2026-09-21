@@ -1,7 +1,7 @@
--- Standalone smoke test for the automcp extension.
+-- Standalone smoke test for the auto_tools extension.
 --
 -- Run from the project root:
---   nvim --headless --noplugin -u NONE -c "set rtp+=." -c "luafile tests/test_automcp.lua" -c "qa!"
+--   nvim --headless --noplugin -u NONE -c "set rtp+=." -c "luafile tests/test_auto_tools.lua" -c "qa!"
 --
 -- The test mocks the required CodeCompanion modules (config, log, mcp) and
 -- verifies that:
@@ -83,7 +83,7 @@ end
 
 -- 1. Load extension and run setup --------------------------------------------
 
-local ext = require("codecompanion._extensions.automcp")
+local ext = require("codecompanion._extensions.auto_tools")
 assert(type(ext) == "table" and type(ext.setup) == "function", "extension must expose setup()")
 ext.setup({
 	individual_tools = { "subagents_*" },
@@ -270,8 +270,8 @@ assert(dt_tool_off.status == "error", "disabling a tool that is not enabled shou
 -- 8. no_approval_for allow-list --------------------------------------------------
 
 -- Re-require the extension to reset module-level `current_opts`.
-package.loaded["codecompanion._extensions.automcp"] = nil
-local ext2 = require("codecompanion._extensions.automcp")
+package.loaded["codecompanion._extensions.auto_tools"] = nil
+local ext2 = require("codecompanion._extensions.auto_tools")
 
 ext2.setup({
 	individual_tools = { "subagents_*" },
