@@ -43,11 +43,11 @@ function Extension.setup(opts)
 
 	local has_mcp, mcp = pcall(require, "codecompanion.mcp")
 	if not has_mcp or mcp == nil then
-		log:warn("[automcp] MCP support was not found in CodeCompanion; the `auto_tools` tools were not registered")
+		log:warn("[auto_tools] MCP support was not found in CodeCompanion; the `auto_tools` tools were not registered")
 		return
 	end
 
-	local tools = require("codecompanion._extensions.automcp.tools")
+	local tools = require("codecompanion._extensions.auto_tools.tools")
 	local tools_config = require("codecompanion.config").interactions.chat.tools
 
 	-- Tools that take a `name` argument (a group or individual tool name) and
