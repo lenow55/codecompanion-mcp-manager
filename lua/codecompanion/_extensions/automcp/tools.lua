@@ -4,9 +4,95 @@ local fmt = string.format
 
 local M = {}
 
----Collect all tool *groups* (as opposed to bare tools) that are available in
----the global CodeCompanion tools config. A group is identified by an entry in
----`tools.groups`; the value is a table with a `tools` array of tool names.
+-- Glob helpers ---------------------------------------------------------------
+
+local pattern_cache = {}
+
+---Compile a glob pattern to an lpeg pattern, caching the result.
+---@param pattern string
+---@return userdata|false
+local function compile_pattern(pattern)
+	local cached = pattern_cache[pattern]
+	if cached ~= nil then
+		return cached
+	end
+
+	local compiled = false
+	if vim.glob and vim.glob.to_lpeg then
+		local ok, result = pcall(vim.glob.to_lpeg, pattern)
+		if ok and result then
+			compiled = result
+		end
+	end
+
+	pattern_cache[pattern] = compiled
+	return compiled
+end
+
+---Whether a compiled pattern matches the *whole* string.
+---@param compiled userdata
+---@param name string
+---@return boolean
+local function glob_matches(compiled, name)
+	local ok_lpeg, lpeg = pcall(require, "lpeg")
+	if not ok_lpeg or not lpeg then
+		return false
+	end
+
+	-- `compiled * -P(1)` requires the match to consume the entire subject.
+	local ok, result = pcall(function()
+		return lpeg.match(compiled * -lpeg.P(1), name)
+	end)
+	return ok and result ~= nil
+end
+
+---Whether `name` matches any of the glob `patterns`.
+---@param name string
+---@param patterns? string[]
+---@return boolean
+local function matches_any(name, patterns)
+	for _, pattern in ipairs(patterns or {}) do
+		local compiled = compile_pattern(pattern)
+		if compiled and glob_matches(compiled, name) then
+			return true
+		end
+	end
+	return false
+end
+
+---Public wrapper so other modules (e.g. the extension's `init`) can reuse the
+---glob matching for approval allow-lists.
+---@param name string
+---@param patterns? string[]
+---@return boolean
+function M.matches_pattern(name, patterns)
+	return matches_any(name, patterns)
+end
+
+-- Config helpers -------------------------------------------------------------
+
+---@return table
+local function get_opts()
+	return require("codecompanion._extensions.automcp").opts()
+end
+
+---@return table
+local function get_tools_config()
+	return require("codecompanion.config").interactions.chat.tools
+end
+
+---Whether a config entry is an individual tool definition.
+---@param name string
+---@param config any
+---@return boolean
+local function is_tool_config(name, config)
+	if name == "opts" or name == "groups" then
+		return false
+	end
+	return type(config) == "table" and (config.path ~= nil or config.callback ~= nil)
+end
+
+---Collect all tool *groups* available in the tools config.
 ---@param tools_config table
 ---@return table<string, { tools: string[], description?: string }> groups
 local function get_available_groups(tools_config)
@@ -25,21 +111,65 @@ local function get_available_groups(tools_config)
 	return groups
 end
 
----@param name string
-local function tool_display_name(name)
-	return "`" .. name .. "`"
+---Collect all individual tools available in the tools config.
+---@param tools_config table
+---@return table<string, table> tools
+local function get_available_tools(tools_config)
+	local tools = {}
+	for name, tool_config in pairs(tools_config) do
+		if is_tool_config(name, tool_config) then
+			tools[name] = tool_config
+		end
+	end
+	return tools
 end
 
----Attach a tool group to the current chat's tool_registry.
+---Resolve a user-provided name to a group or an individual tool, honouring the
+---deny-list and the individual-tools allow-list.
+---Order: deny -> group -> individual tool.
+---@param name string
+---@param tools_config table
+---@param opts table
+---@return table|nil target { type: "group"|"tool", config: table }
+local function resolve_target(name, tools_config, opts)
+	if matches_any(name, opts.deny_groups) then
+		return nil
+	end
+
+	local groups = tools_config.groups or {}
+	if groups[name] then
+		return { type = "group", config = groups[name] }
+	end
+
+	local tool_config = tools_config[name]
+	if is_tool_config(name, tool_config) and matches_any(name, opts.individual_tools) then
+		return { type = "tool", config = tool_config }
+	end
+
+	return nil
+end
+
+---A single, intentionally vague error used both for denied and unknown names so
+---the LLM cannot tell a blocked group apart from a non-existent one.
+---@param name string
+---@return table
+local function not_available(name)
+	return {
+		status = "error",
+		data = fmt("`%s` is not available. Call `list_tools` to see what can be enabled.", name),
+	}
+end
+
+-- Attach / detach ------------------------------------------------------------
+
 ---@param chat CodeCompanion.Chat
 ---@param group_name string
 ---@return boolean ok
-local function attach_tool_group(chat, group_name)
+local function attach_group(chat, group_name)
 	if not (chat.tools and chat.tool_registry) then
 		return false
 	end
-	local config = require("codecompanion.config")
-	local tools_config = config.interactions.chat.tools
+	local tools_config = get_tools_config()
 	local group_config = tools_config.groups and tools_config.groups[group_name]
 	if not group_config or not group_config.tools then
 		return false
@@ -49,11 +179,23 @@ local function attach_tool_group(chat, group_name)
 	return added ~= nil
 end
 
----Detach a tool group from the current chat's tool_registry.
+---@param chat CodeCompanion.Chat
+---@param tool_name string
+---@return boolean ok
+local function attach_tool(chat, tool_name)
+	if not chat.tool_registry then
+		return false
+	end
+	local tools_config = get_tools_config()
+	local added = chat.tool_registry:add_single_tool(tool_name, { config = tools_config[tool_name] })
+	log:debug("[automcp] attached individual tool `%s` to chat %s", tool_name, tostring(chat.id))
+	return added ~= nil
+end
+
 ---@param chat CodeCompanion.Chat
 ---@param group_name string
 ---@return boolean removed
-local function detach_tool_group(chat, group_name)
+local function detach_group(chat, group_name)
 	if not chat.tool_registry then
 		return false
 	end
@@ -65,52 +207,86 @@ local function detach_tool_group(chat, group_name)
 	return true
 end
 
+-- Tools ----------------------------------------------------------------------
+
 ---@return CodeCompanion.Tools.Tool
-function M.list_tool_groups()
+function M.list_tools()
 	return {
-		name = "mcp_list_tool_groups",
+		name = "list_tools",
 		cmds = {
 			function(self, _args, _input)
-				local config = require("codecompanion.config")
-				local tools_config = config.interactions.chat.tools
-				local groups = get_available_groups(tools_config)
-				if vim.tbl_isempty(groups) then
-					return { status = "success", data = "No tool groups are configured." }
-				end
-				-- Mark which groups are already attached to the current chat
+				local tools_config = get_tools_config()
+				local opts = get_opts()
 				local chat = self.chat
-				if chat and chat.tool_registry then
-					for name, g in pairs(groups) do
-						g.attached = chat.tool_registry.groups[name] ~= nil
+				local registry = chat and chat.tool_registry or nil
+
+				local entries = {}
+
+				-- Groups first so that a name shared by a group and a tool resolves
+				-- in favour of the group (matching `resolve_target`).
+				for name, group in pairs(get_available_groups(tools_config)) do
+					if not matches_any(name, opts.deny_groups) then
+						entries[name] = {
+							name = name,
+							type = "group",
+							description = group.description,
+							tools = group.tools,
+							attached = registry ~= nil and registry.groups[name] ~= nil,
+						}
 					end
 				end
-				local names = vim.tbl_keys(groups)
+
+				for name, tool_config in pairs(get_available_tools(tools_config)) do
+					if
+						entries[name] == nil
+						and not matches_any(name, opts.deny_groups)
+						and matches_any(name, opts.individual_tools)
+					then
+						entries[name] = {
+							name = name,
+							type = "tool",
+							description = tool_config.description,
+							attached = registry ~= nil and registry.in_use[name] ~= nil,
+						}
+					end
+				end
+
+				if vim.tbl_isempty(entries) then
+					return { status = "success", data = "No tools or tool groups are available." }
+				end
+
+				local names = vim.tbl_keys(entries)
 				table.sort(names)
+
 				local blocks = {}
 				for _, name in ipairs(names) do
-					local g = groups[name]
-					local tool_names = g.tools or {}
-					table.sort(tool_names)
+					local entry = entries[name]
 					local lines = {
 						"---",
-						string.format("name: %s", name),
-						string.format("attached: %s", tostring(g.attached or false)),
-						string.format("description: %s", g.description or ""),
-						"tools:",
+						fmt("name: %s", entry.name),
+						fmt("type: %s", entry.type),
+						fmt("attached: %s", tostring(entry.attached)),
+						fmt("description: %s", entry.description or ""),
 					}
-					for _, tn in ipairs(tool_names) do
-						table.insert(lines, string.format("- %s", tn))
+					if entry.type == "group" then
+						local tool_names = vim.deepcopy(entry.tools or {})
+						table.sort(tool_names)
+						table.insert(lines, "tools:")
+						for _, tool_name in ipairs(tool_names) do
+							table.insert(lines, fmt("- %s", tool_name))
+						end
 					end
 					table.insert(blocks, table.concat(lines, "\n"))
 				end
+
 				return { status = "success", data = table.concat(blocks, "\n") }
 			end,
 		},
 		schema = {
 			type = "function",
 			["function"] = {
-				name = "mcp_list_tool_groups",
-				description = "List all tool groups available in the CodeCompanion config. Returns one block per group with `name`, `attached` (whether the group is currently attached to this chat), `description`, and a `tools` list of tool names. Call this before `mcp_enable_tool_group` or `mcp_disable_tool_group` to discover valid group names.",
+				name = "list_tools",
+				description = "List every capability that can be enabled in this chat: tool groups and individual tools. Returns one block per capability with `name`, `type` (`group` or `tool`), `attached` (whether it is currently enabled in this chat), `description`, and, for groups, a `tools` list of member tool names. Call this before `enable_tool` or `disable_tool` to discover valid names.",
 				parameters = {
 					type = "object",
 					properties = vim.empty_dict(),
@@ -122,26 +298,26 @@ function M.list_tool_groups()
 		},
 		output = {
 			prompt = function(_self, _meta)
-				return "List tool groups?"
+				return "List available tools?"
 			end,
 			success = function(self, stdout, meta)
 				local chat = meta.tools.chat
 				local llm_output = vim.iter(stdout or {}):flatten():join("\n")
-				chat:add_tool_output(self, llm_output, "Tool groups listed")
+				chat:add_tool_output(self, llm_output, "Tools listed")
 			end,
 			error = function(self, stderr, meta)
 				local chat = meta.tools.chat
 				local err = vim.iter(stderr or {}):flatten():join("\n")
-				chat:add_tool_output(self, err or "Unknown error while listing tool groups")
+				chat:add_tool_output(self, err or "Unknown error while listing tools")
 			end,
 		},
 	}
 end
 
 ---@return CodeCompanion.Tools.Tool
-function M.enable_tool_group()
+function M.enable_tool()
 	return {
-		name = "mcp_enable_tool_group",
+		name = "enable_tool",
 		cmds = {
 			function(self, args, _input)
 				local name = args and args.name
@@ -149,17 +325,11 @@ function M.enable_tool_group()
 					return { status = "error", data = "The `name` argument is required." }
 				end
 
-				local config = require("codecompanion.config")
-				local tools_config = config.interactions.chat.tools
-				local group_config = tools_config.groups and tools_config.groups[name]
-				if not group_config or not group_config.tools then
-					return {
-						status = "error",
-						data = fmt(
-							"Tool group %s is not configured. Call `mcp_list_tool_groups` to see available groups.",
-							tool_display_name(name)
-						),
-					}
+				local tools_config = get_tools_config()
+				local opts = get_opts()
+				local target = resolve_target(name, tools_config, opts)
+				if not target then
+					return not_available(name)
 				end
 
 				local chat = self.chat
@@ -167,42 +337,44 @@ function M.enable_tool_group()
 					return { status = "error", data = "No active chat buffer was detected." }
 				end
 
-				-- Already attached?
-				if chat.tool_registry.groups[name] then
+				if target.type == "group" then
+					if chat.tool_registry.groups[name] then
+						return { status = "success", data = fmt("`%s` is already enabled in this chat.", name) }
+					end
+					local ok, added = pcall(attach_group, chat, name)
+					if not ok or not added then
+						return { status = "error", data = fmt("Failed to enable `%s`.", name) }
+					end
 					return {
 						status = "success",
-						data = fmt("Tool group %s is already attached to this chat.", tool_display_name(name)),
+						data = fmt("`%s` enabled. Its tools become callable on your next turn.", name),
 					}
 				end
 
-				local ok = pcall(attach_tool_group, chat, name)
-				if not ok then
-					return {
-						status = "error",
-						data = fmt("Failed to attach tool group %s.", tool_display_name(name)),
-					}
+				if chat.tool_registry.in_use[name] then
+					return { status = "success", data = fmt("`%s` is already enabled in this chat.", name) }
 				end
-
+				local ok, added = pcall(attach_tool, chat, name)
+				if not ok or not added then
+					return { status = "error", data = fmt("Failed to enable `%s`.", name) }
+				end
 				return {
 					status = "success",
-					data = fmt(
-						"Tool group %s attached to this chat. Its tools are now registered and become callable on the next turn.",
-						tool_display_name(name)
-					),
+					data = fmt("`%s` enabled. It becomes callable on your next turn.", name),
 				}
 			end,
 		},
 		schema = {
 			type = "function",
 			["function"] = {
-				name = "mcp_enable_tool_group",
-				description = "Attach a tool group to the current chat by name. The group's tools become registered in the chat and callable on the LLM's next turn; do not try to invoke them in the same response. Use `mcp_list_tool_groups` first to discover valid group names.",
+				name = "enable_tool",
+				description = "Enable a capability (a tool group or an individual tool) in the current chat by name. Its tools become callable on your next turn; do not try to invoke them in the same response. Use `list_tools` first to discover valid names and to understand what each capability provides.",
 				parameters = {
 					type = "object",
 					properties = {
 						name = {
 							type = "string",
-							description = "The name of the tool group to attach. Must be one of the names returned by `mcp_list_tool_groups`.",
+							description = "The name of the group or individual tool to enable. Must be one of the `name` values returned by `list_tools`.",
 						},
 					},
 					required = { "name" },
@@ -213,33 +385,26 @@ function M.enable_tool_group()
 		},
 		output = {
 			prompt = function(self, _meta)
-				return fmt("Attach tool group %s?", tool_display_name(self.args.name or "?"))
+				return fmt("Enable `%s`?", self.args.name or "?")
 			end,
 			success = function(self, stdout, meta)
 				local chat = meta.tools.chat
 				local llm_output = vim.iter(stdout or {}):flatten():join("\n")
-				chat:add_tool_output(
-					self,
-					llm_output,
-					fmt("Tool group %s attached", tool_display_name(self.args.name or "?"))
-				)
+				chat:add_tool_output(self, llm_output, fmt("`%s` enabled", self.args.name or "?"))
 			end,
 			error = function(self, stderr, meta)
 				local chat = meta.tools.chat
 				local err = vim.iter(stderr or {}):flatten():join("\n")
-				chat:add_tool_output(
-					self,
-					err or fmt("Unknown error while attaching %s", tool_display_name(self.args.name or "?"))
-				)
+				chat:add_tool_output(self, err or fmt("Unknown error while enabling `%s`", self.args.name or "?"))
 			end,
 		},
 	}
 end
 
 ---@return CodeCompanion.Tools.Tool
-function M.disable_tool_group()
+function M.disable_tool()
 	return {
-		name = "mcp_disable_tool_group",
+		name = "disable_tool",
 		cmds = {
 			function(self, args, _input)
 				local name = args and args.name
@@ -247,34 +412,49 @@ function M.disable_tool_group()
 					return { status = "error", data = "The `name` argument is required." }
 				end
 
+				local tools_config = get_tools_config()
+				local opts = get_opts()
+				local target = resolve_target(name, tools_config, opts)
+				if not target then
+					return not_available(name)
+				end
+
 				local chat = self.chat
 				if not chat or not chat.tool_registry then
 					return { status = "error", data = "No active chat buffer was detected." }
 				end
 
-				if not chat.tool_registry.groups[name] then
-					return {
-						status = "error",
-						data = fmt(
-							"Tool group %s is not attached to this chat. Call `mcp_list_tool_groups` to see attached groups.",
-							tool_display_name(name)
-						),
-					}
+				if target.type == "group" then
+					if not chat.tool_registry.groups[name] then
+						return { status = "error", data = fmt("`%s` is not enabled in this chat.", name) }
+					end
+					local removed = detach_group(chat, name)
+					if not removed then
+						return { status = "error", data = fmt("Failed to disable `%s`.", name) }
+					end
+					return { status = "success", data = fmt("`%s` disabled. Its tools are no longer callable.", name) }
 				end
 
-				local removed = detach_tool_group(chat, name)
-				if not removed then
-					return {
-						status = "error",
-						data = fmt("Failed to detach tool group %s.", tool_display_name(name)),
-					}
+				-- Individual tools are registered one-by-one and CodeCompanion's
+				-- ToolRegistry has no per-tool removal. We refuse to detach them (we
+				-- neither patch the core nor duplicate its bookkeeping) and leave the
+				-- tool enabled. `status = "success"` is deliberate: an error would be
+				-- fed back to the LLM (auto_submit_errors) and cause retry loops.
+				if not chat.tool_registry.in_use[name] then
+					return { status = "error", data = fmt("`%s` is not enabled in this chat.", name) }
 				end
 
+				log:warn("[automcp] cannot disable individual tool `%s`; leaving it enabled", name)
+				vim.notify(
+					fmt("Individual tool `%s` cannot be disabled and stays enabled in this chat.", name),
+					vim.log.levels.WARN,
+					{ title = "CodeCompanion" }
+				)
 				return {
 					status = "success",
 					data = fmt(
-						"Tool group %s detached from this chat. Its tools are no longer callable.",
-						tool_display_name(name)
+						"`%s` is an individual tool and cannot be disabled on its own; it stays enabled in this chat. Only tool groups can be disabled.",
+						name
 					),
 				}
 			end,
@@ -282,14 +462,14 @@ function M.disable_tool_group()
 		schema = {
 			type = "function",
 			["function"] = {
-				name = "mcp_disable_tool_group",
-				description = "Detach a tool group from the current chat by name. After detaching, none of the group's tools will be callable for the rest of this chat. Use `mcp_list_tool_groups` first to discover which groups are currently attached.",
+				name = "disable_tool",
+				description = "Disable a capability (a tool group or an individual tool) in the current chat by name. Note: individual tools cannot be disabled on their own and remain enabled; only tool groups can be disabled. Use `list_tools` first to discover valid names.",
 				parameters = {
 					type = "object",
 					properties = {
 						name = {
 							type = "string",
-							description = "The name of the tool group to detach. Must be one of the names returned by `mcp_list_tool_groups`.",
+							description = "The name of the group or individual tool to disable. Must be one of the `name` values returned by `list_tools`.",
 						},
 					},
 					required = { "name" },
@@ -300,24 +480,17 @@ function M.disable_tool_group()
 		},
 		output = {
 			prompt = function(self, _meta)
-				return fmt("Detach tool group %s?", tool_display_name(self.args.name or "?"))
+				return fmt("Disable `%s`?", self.args.name or "?")
 			end,
 			success = function(self, stdout, meta)
 				local chat = meta.tools.chat
 				local llm_output = vim.iter(stdout or {}):flatten():join("\n")
-				chat:add_tool_output(
-					self,
-					llm_output,
-					fmt("Tool group %s detached", tool_display_name(self.args.name or "?"))
-				)
+				chat:add_tool_output(self, llm_output, fmt("`%s` disabled", self.args.name or "?"))
 			end,
 			error = function(self, stderr, meta)
 				local chat = meta.tools.chat
 				local err = vim.iter(stderr or {}):flatten():join("\n")
-				chat:add_tool_output(
-					self,
-					err or fmt("Unknown error while detaching %s", tool_display_name(self.args.name or "?"))
-				)
+				chat:add_tool_output(self, err or fmt("Unknown error while disabling `%s`", self.args.name or "?"))
 			end,
 		},
 	}
