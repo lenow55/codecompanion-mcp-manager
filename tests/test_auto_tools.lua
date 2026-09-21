@@ -35,7 +35,7 @@ local config_store = {
 					},
 				},
 				-- Individual tools in the global config
-				subagents_research = {
+				subagent_research = {
 					description = "Delegates a research subtask to a subagent",
 					callback = function()
 						return { name = "subagents_research" }
@@ -46,6 +46,20 @@ local config_store = {
 					callback = function()
 						return { name = "other_tool" }
 					end,
+				},
+				-- Inline tool definition, exactly how codecompanion-subagents.nvim and
+				-- other extensions register their tools (no path/callback).
+				subagent_generic = {
+					name = "subagent_generic",
+					cmds = { function() end },
+					schema = {
+						type = "function",
+						["function"] = {
+							name = "subagent_generic",
+							description = "Delegates a task to the generic subagent",
+							parameters = { type = "object", properties = {}, required = {} },
+						},
+					},
 				},
 			},
 		},
@@ -86,7 +100,7 @@ end
 local ext = require("codecompanion._extensions.auto_tools")
 assert(type(ext) == "table" and type(ext.setup) == "function", "extension must expose setup()")
 ext.setup({
-	individual_tools = { "subagents_*" },
+	individual_tools = { "subagent_*" },
 	deny_groups = { "secret*" },
 	tool_opts = { enable_tool = { require_approval_before = true } },
 })
@@ -163,8 +177,14 @@ assert(lt_nochat.status == "success", "list_tools should succeed without chat")
 assert(lt_nochat.data:match("testgroup"), "list_tools should list testgroup")
 assert(lt_nochat.data:match("auto_tools"), "list_tools should list the auto_tools group")
 assert(lt_nochat.data:match("type: group"), "list_tools should report group type")
-assert(lt_nochat.data:match("subagents_research"), "list_tools should list allow-listed individual tools")
+assert(lt_nochat.data:match("subagent_research"), "list_tools should list allow-listed individual tools")
 assert(lt_nochat.data:match("type: tool"), "list_tools should report tool type")
+-- Inline tools (registered without path/callback, e.g. by subagents) must be visible
+assert(lt_nochat.data:match("subagent_generic"), "list_tools should list allow-listed inline tools")
+assert(
+	lt_nochat.data:match("Delegates a task to the generic subagent"),
+	"list_tools should fall back to the schema description for inline tools"
+)
 
 -- Denied groups are hidden entirely
 assert(not lt_nochat.data:match("secrets"), "list_tools must hide denied groups")
@@ -220,9 +240,14 @@ assert(et_denied.data:match("not available"), "denied group must be indistinguis
 -- 6. enable_tool cmd (individual tools) ----------------------------------------
 
 -- Allow-listed tool (glob) can be enabled individually
-local et_tool = enable_tool.cmds[1]({ chat = chat_clean }, { name = "subagents_research" }, {})
+local et_tool = enable_tool.cmds[1]({ chat = chat_clean }, { name = "subagent_research" }, {})
 assert(et_tool.status == "success", "allow-listed individual tool should be enabled")
-assert(chat_clean.tool_registry._in_added_tools["subagents_research"], "add_single_tool should have been called")
+assert(chat_clean.tool_registry._in_added_tools["subagent_research"], "add_single_tool should have been called")
+
+-- Inline tools are resolved the same way
+local et_inline = enable_tool.cmds[1]({ chat = chat_clean }, { name = "subagent_generic" }, {})
+assert(et_inline.status == "success", "allow-listed inline tool should be enabled")
+assert(chat_clean.tool_registry._in_added_tools["subagent_generic"], "add_single_tool should have been called")
 
 -- Non allow-listed tool cannot be enabled
 local et_tool_denied = enable_tool.cmds[1]({ chat = chat_clean }, { name = "other_tool" }, {})
@@ -257,14 +282,20 @@ assert(dt_denied.status == "error", "denied group must not be disabled")
 assert(dt_denied.data:match("not available"), "denied disable must look like an unknown name")
 
 -- Individual tools cannot be disabled; they stay enabled
-local chat_tool_on = mock_chat({ in_use = { subagents_research = true } })
-local dt_tool = disable_tool.cmds[1]({ chat = chat_tool_on }, { name = "subagents_research" }, {})
+local chat_tool_on = mock_chat({ in_use = { subagent_research = true } })
+local dt_tool = disable_tool.cmds[1]({ chat = chat_tool_on }, { name = "subagent_research" }, {})
 assert(dt_tool.status == "success", "disabling an individual tool should not error")
 assert(dt_tool.data:match("cannot be disabled"), "disabling an individual tool should explain it stays enabled")
-assert(chat_tool_on.tool_registry.in_use["subagents_research"] == true, "individual tool must stay enabled")
+assert(chat_tool_on.tool_registry.in_use["subagent_research"] == true, "individual tool must stay enabled")
+
+-- Inline tools behave like any other individual tool: they cannot be disabled
+local chat_inline_on = mock_chat({ in_use = { subagent_generic = true } })
+local dt_inline = disable_tool.cmds[1]({ chat = chat_inline_on }, { name = "subagent_generic" }, {})
+assert(dt_inline.status == "success", "disabling an inline individual tool should not error")
+assert(dt_inline.data:match("cannot be disabled"), "inline individual tools should explain they stay enabled")
 
 -- Disabling a tool that is not enabled -> error
-local dt_tool_off = disable_tool.cmds[1]({ chat = mock_chat({}) }, { name = "subagents_research" }, {})
+local dt_tool_off = disable_tool.cmds[1]({ chat = mock_chat({}) }, { name = "subagent_research" }, {})
 assert(dt_tool_off.status == "error", "disabling a tool that is not enabled should error")
 
 -- 8. no_approval_for allow-list --------------------------------------------------
@@ -274,7 +305,7 @@ package.loaded["codecompanion._extensions.auto_tools"] = nil
 local ext2 = require("codecompanion._extensions.auto_tools")
 
 ext2.setup({
-	individual_tools = { "subagents_*" },
+	individual_tools = { "subagent_*" },
 	deny_groups = { "secret*" },
 	-- Global allow-list applies to every name-based tool; globs are supported.
 	no_approval_for = { "testgroup", "sub*" },
@@ -311,7 +342,7 @@ end
 
 local et2 = tools_config2.enable_tool
 assert(call_approval(et2, "testgroup") == false, "global no_approval_for should bypass testgroup")
-assert(call_approval(et2, "subagents_research") == false, "glob pattern should bypass subagents_research")
+assert(call_approval(et2, "subagent_research") == false, "glob pattern should bypass subagent_research")
 assert(call_approval(et2, "safe-group") == false, "per-tool no_approval_for should bypass safe-group")
 assert(call_approval(et2, "other") == true, "non-whitelisted name should fall back to base approval")
 assert(call_approval(et2, nil) == true, "missing name should fall back to base approval")

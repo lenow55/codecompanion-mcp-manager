@@ -82,6 +82,9 @@ local function get_tools_config()
 end
 
 ---Whether a config entry is an individual tool definition.
+---A tool can be declared either as a factory (`path`/`callback`/`extends`) or as
+---an inline definition (`schema`/`cmds`), the latter being how extensions such as
+---`codecompanion-subagents.nvim` register their tools directly into the config.
 ---@param name string
 ---@param config any
 ---@return boolean
@@ -89,7 +92,14 @@ local function is_tool_config(name, config)
 	if name == "opts" or name == "groups" then
 		return false
 	end
-	return type(config) == "table" and (config.path ~= nil or config.callback ~= nil)
+	if type(config) ~= "table" then
+		return false
+	end
+	return config.path ~= nil
+		or config.callback ~= nil
+		or config.extends ~= nil
+		or config.schema ~= nil
+		or config.cmds ~= nil
 end
 
 ---Collect all tool *groups* available in the tools config.
@@ -245,7 +255,9 @@ function M.list_tools()
 						entries[name] = {
 							name = name,
 							type = "tool",
-							description = tool_config.description,
+							-- Inline tools keep their description inside the schema.
+							description = tool_config.description
+								or vim.tbl_get(tool_config, "schema", "function", "description"),
 							attached = registry ~= nil and registry.in_use[name] ~= nil,
 						}
 					end
