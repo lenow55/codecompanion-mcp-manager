@@ -19,6 +19,7 @@ local log = require("codecompanion.utils.log")
 local current_opts = {
 	tool_opts = {
 		list_tools = {},
+		search_tools = {},
 		enable_tool = {},
 		disable_tool = {},
 	},

@@ -217,6 +217,19 @@ local function detach_group(chat, group_name)
 	return true
 end
 
+-- Search helpers -------------------------------------------------------------
+
+---Reduce a free-form query to its first word, lowercased. Leading whitespace is skipped.
+---@param query string
+---@return string|nil word
+local function first_word(query)
+	local word = query:match("^%s*(%S+)")
+	if not word then
+		return nil
+	end
+	return word:lower()
+end
+
 -- Tools ----------------------------------------------------------------------
 
 ---@return CodeCompanion.Tools.Tool
@@ -321,6 +334,157 @@ function M.list_tools()
 				local chat = meta.tools.chat
 				local err = vim.iter(stderr or {}):flatten():join("\n")
 				chat:add_tool_output(self, err or "Unknown error while listing tools")
+			end,
+		},
+	}
+end
+
+---@return CodeCompanion.Tools.Tool
+function M.search_tools()
+	return {
+		name = "search_tools",
+		cmds = {
+			function(self, args, _input)
+				local query = args and args.query
+				if type(query) ~= "string" or query == "" then
+					return { status = "error", data = "The `query` argument is required." }
+				end
+				local word = first_word(query)
+				if not word then
+					return {
+						status = "error",
+						data = "The `query` argument must contain at least one non-empty word.",
+					}
+				end
+
+				local tools_config = get_tools_config()
+				local opts = get_opts()
+				local chat = self.chat
+				local registry = chat and chat.tool_registry or nil
+
+				-- `results` maps a capability name to its rendered block. Groups
+				-- are processed first so that a name shared by a group and a tool
+				-- resolves in favour of the group (matching `resolve_target`).
+				local results = {}
+
+				-- Groups: match by the group name or by any member tool name.
+				for name, group in pairs(get_available_groups(tools_config)) do
+					if not matches_any(name, opts.deny_groups) then
+						local group_matched = name:lower():find(word, 1, true) ~= nil
+						local matched_tools = {}
+						for _, tool_name in ipairs(group.tools or {}) do
+							if tool_name:lower():find(word, 1, true) ~= nil then
+								table.insert(matched_tools, tool_name)
+							end
+						end
+						if group_matched or #matched_tools > 0 then
+							local lines = {
+								"---",
+								fmt("name: %s", name),
+								"type: group",
+								fmt("attached: %s", tostring(registry ~= nil and registry.groups[name] ~= nil)),
+								fmt("description: %s", group.description or ""),
+							}
+							-- A group found by its own name lists all of its members, so the
+							-- LLM can see what the group provides and decide; a group found
+							-- only via its members lists only the matched ones.
+							local listed_tools = group_matched
+								and vim.deepcopy(group.tools or {})
+								or matched_tools
+							if #listed_tools > 0 then
+								table.sort(listed_tools)
+								table.insert(lines, "tools:")
+								for _, tool_name in ipairs(listed_tools) do
+									table.insert(lines, fmt("- %s", tool_name))
+								end
+							end
+							results[name] = table.concat(lines, "\n")
+						end
+					end
+				end
+
+				-- Allow-listed individual tools: match by their own name.
+				for name, tool_config in pairs(get_available_tools(tools_config)) do
+					if
+						results[name] == nil
+						and not matches_any(name, opts.deny_groups)
+						and matches_any(name, opts.individual_tools)
+						and name:lower():find(word, 1, true) ~= nil
+					then
+						results[name] = table.concat({
+							"---",
+							fmt("name: %s", name),
+							"type: tool",
+							fmt("attached: %s", tostring(registry ~= nil and registry.in_use[name] ~= nil)),
+							fmt(
+								"description: %s",
+								tool_config.description
+									or vim.tbl_get(tool_config, "schema", "function", "description")
+									or ""
+							),
+						}, "\n")
+					end
+				end
+
+				local count = vim.tbl_count(results)
+				if count == 0 then
+					return {
+						status = "success",
+						data = fmt(
+							"No tool groups or tools matched `%s`. Call `list_tools` to see what can be enabled.",
+							word
+						),
+					}
+				end
+
+				local names = vim.tbl_keys(results)
+				table.sort(names)
+				local blocks = {}
+				for _, name in ipairs(names) do
+					table.insert(blocks, results[name])
+				end
+				return {
+					status = "success",
+					data = fmt("Search results for `%s` (%d match%s):\n", word, count, count == 1 and "" or "es")
+						.. table.concat(blocks, "\n"),
+				}
+			end,
+		},
+		schema = {
+			type = "function",
+			["function"] = {
+				name = "search_tools",
+				description = "Search tool groups and individual tools by name. Only the first word of `query` is used; it is matched as a case-insensitive substring against group names and the names of the tools inside each group. Returns one block per match in the same format as `list_tools` (`name`, `type`, `attached`, `description`); for a group matched by its own name the `tools` section lists all of its member tools, and for a group matched only via its members it lists only the matched member tools. Use it instead of `list_tools` when you already know part of a tool or group name, then enable the capability with `enable_tool` using the `name` from the result.",
+				parameters = {
+					type = "object",
+					properties = {
+						query = {
+							type = "string",
+							description = "Free-form search query. Only its first word is searched, as a case-insensitive substring of group names and member tool names.",
+						},
+					},
+					required = { "query" },
+					additionalProperties = false,
+				},
+				strict = true,
+			},
+		},
+		output = {
+			prompt = function(self, _meta)
+				return fmt("Search tools for `%s`?", self.args.query or "?")
+			end,
+			success = function(self, stdout, meta)
+				local chat = meta.tools.chat
+				local llm_output = vim.iter(stdout or {}):flatten():join("\n")
+				chat:add_tool_output(self, llm_output, fmt("Searched tools for `%s`", self.args.query or "?"))
+			end,
+			error = function(self, stderr, meta)
+				local chat = meta.tools.chat
+				local err = vim.iter(stderr or {}):flatten():join("\n")
+				chat:add_tool_output(
+					self,
+					err or fmt("Unknown error while searching tools for `%s`", self.args.query or "?")
+				)
 			end,
 		},
 	}
