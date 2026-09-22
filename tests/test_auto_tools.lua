@@ -13,6 +13,7 @@
 --   6. `individual_tools` (globs) gate which tools may be enabled on their own
 --   7. `deny_groups` (globs) hides and blocks groups in every operation
 --   8. individual tools cannot be disabled and stay enabled
+--   9. `search_tools` finds groups and tools by the first word of the query
 
 -- Mock codecompanion modules -------------------------------------------------
 
@@ -110,6 +111,7 @@ ext.setup({
 local tools_config = config_store.interactions.chat.tools
 for _, name in ipairs({
 	"list_tools",
+	"search_tools",
 	"enable_tool",
 	"disable_tool",
 }) do
@@ -131,7 +133,7 @@ assert(tools_config.list_tools.opts.require_approval_before == nil, "approval sh
 
 local group = tools_config.groups.auto_tools
 assert(group, "auto_tools group missing")
-assert(#group.tools == 3, "group should contain 3 tools")
+assert(#group.tools == 4, "group should contain 4 tools")
 assert(group.opts.collapse_tools == true, "group collapse_tools")
 
 -- Mock chat ------------------------------------------------------------------
@@ -197,6 +199,93 @@ local chat_attached = mock_chat({ groups = { testgroup = true } })
 local lt_attached = list_tools.cmds[1]({ chat = chat_attached }, {}, {})
 assert(lt_attached.status == "success", "list_tools should succeed with chat")
 assert(lt_attached.data:match("attached: true"), "list_tools should show attached groups")
+
+-- 4b. search_tools cmd ---------------------------------------------------------
+
+local search_tools = tools_config.search_tools.callback()
+
+-- `query` is required and must contain a word
+local st_missing = search_tools.cmds[1]({ chat = nil }, {}, {})
+assert(st_missing.status == "error", "search_tools should require `query`")
+local st_blank = search_tools.cmds[1]({ chat = nil }, { query = "   " }, {})
+assert(st_blank.status == "error", "search_tools should reject a blank query")
+
+-- Leading whitespace is tolerated: the first word after it is searched
+local st_lead = search_tools.cmds[1]({ chat = nil }, { query = "  tool" }, {})
+assert(st_lead.status == "success", "search_tools should tolerate a leading-whitespace query")
+assert(st_lead.data:match("tool_a"), "the word after leading whitespace must be searched")
+
+-- Group name match: "test" is a substring of `testgroup`; a group matched by its
+-- own name lists all of its members
+local st_group = search_tools.cmds[1]({ chat = nil }, { query = "test" }, {})
+assert(st_group.status == "success", "search_tools should succeed")
+assert(st_group.data:match("name: testgroup"), "search should match a group by its name")
+assert(st_group.data:match("tool_a"), "a group matched by its name should list all of its members")
+assert(st_group.data:match("tool_b"), "a group matched by its name should list all of its members")
+
+-- Attached status is reported for matching groups
+local st_attached = search_tools.cmds[1]({ chat = chat_attached }, { query = "test" }, {})
+assert(st_attached.data:match("attached: true"), "search should show attached groups")
+
+-- Member tool match: "tool" is a substring of tool_a and tool_b inside testgroup
+local st_member = search_tools.cmds[1]({ chat = nil }, { query = "tool" }, {})
+assert(st_member.status == "success", "search should succeed on member tool match")
+assert(st_member.data:match("name: testgroup"), "search should match a group via its member tools")
+assert(st_member.data:match("tool_a"), "a matched member tool must be listed")
+assert(st_member.data:match("tool_b"), "a matched member tool must be listed")
+assert(st_member.data:find("empty_group") == nil, "unrelated groups must not appear")
+
+-- Only the FIRST word of the query is used
+local st_firstword = search_tools.cmds[1]({ chat = nil }, { query = "find the tool" }, {})
+assert(st_firstword.data:find("tool_a") == nil, "only the first word of the query must be searched")
+assert(st_firstword.data:match("No tool groups or tools matched"), "a non-matching first word should report no results")
+
+-- Matching is a case-insensitive substring
+local st_case = search_tools.cmds[1]({ chat = nil }, { query = "TOOL" }, {})
+assert(st_case.data:match("tool_a"), "search should be case-insensitive")
+
+-- Allow-listed individual tools match by their own name
+local st_indiv = search_tools.cmds[1]({ chat = nil }, { query = "subagent" }, {})
+assert(st_indiv.status == "success", "search should succeed on individual tool match")
+assert(st_indiv.data:match("name: subagent_research"), "an allow-listed individual tool should be found")
+assert(st_indiv.data:match("name: subagent_generic"), "an allow-listed inline individual tool should be found")
+assert(st_indiv.data:match("type: tool"), "individual tools should be reported as type: tool")
+assert(st_indiv.data:find("testgroup") == nil, "unrelated groups must not appear")
+
+-- Attached status is reported for individual tools (in_use)
+local st_indiv_attached = search_tools.cmds[1](
+	{ chat = mock_chat({ in_use = { subagent_research = true } }) },
+	{ query = "subagent" },
+	{}
+)
+assert(
+	st_indiv_attached.data:match("name: subagent_research\ntype: tool\nattached: true"),
+	"search should show attached individual tools"
+)
+
+-- Name collision: a group and an allow-listed tool share a name -> the group wins
+local search_groups = config_store.interactions.chat.tools.groups
+search_groups.subagent_generic = { tools = { "tool_c" }, description = "group vs tool" }
+local st_collision = search_tools.cmds[1]({ chat = nil }, { query = "subagent" }, {})
+assert(
+	st_collision.data:match("name: subagent_generic\ntype: group"),
+	"collision in search should resolve to the group"
+)
+assert(
+	st_collision.data:find("name: subagent_generic\ntype: tool") == nil,
+	"the colliding individual tool must not appear as a separate block"
+)
+search_groups.subagent_generic = nil
+
+-- Denied groups stay hidden from search
+local st_denied = search_tools.cmds[1]({ chat = nil }, { query = "vault" }, {})
+assert(st_denied.data:find("secrets") == nil, "denied groups must not appear in search")
+assert(st_denied.data:match("No tool groups or tools matched"), "denied matches should not produce results")
+
+-- Non allow-listed individual tools stay hidden from search
+local st_hidden = search_tools.cmds[1]({ chat = nil }, { query = "other" }, {})
+assert(st_hidden.data:find("other_tool") == nil, "non allow-listed tools must not appear in search")
+assert(st_hidden.data:match("No tool groups or tools matched"), "hidden matches should not produce results")
 
 -- 5. enable_tool cmd (groups) ---------------------------------------------------
 
@@ -334,6 +423,10 @@ assert(
 assert(
 	tools_config2.list_tools.opts.require_approval_before == nil,
 	"list_tools should be unaffected by no_approval_for"
+)
+assert(
+	tools_config2.search_tools.opts.require_approval_before == nil,
+	"search_tools should be unaffected by no_approval_for"
 )
 
 local function call_approval(tool_cfg, name)
