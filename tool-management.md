@@ -1,5 +1,5 @@
 ---
-name: tool-group-management
+name: tool-management
 description: |
   Manage the capabilities available to a CodeCompanion chat.
   Discover, enable and disable tool groups and individual tools so the LLM can
@@ -8,7 +8,7 @@ description: |
   attaching/detaching capabilities, asking what tools are available.
 ---
 
-# Tool Group Management
+# Tool Management
 
 ## Overview
 
@@ -27,23 +27,52 @@ it, so you enable it for the right reason.
 
 ## Workflow
 
-Always follow the same three steps:
+When you need to enable or disable a capability, follow this order:
 
-1. **Discover.** Call `list_tools` to see what exists and what is already
-   enabled — or `search_tools` when you already know part of a tool or group
-   name and only need the matching capabilities.
-2. **Decide.** Read the `description` (and `type`) of each candidate and pick
-   the capability that matches the task at hand. Prefer the narrowest
-   capability that covers what you need.
-3. **Act.** Call `enable_tool` (or `disable_tool`) with the exact `name` you
-   read from the listing.
+1. **Search first.** Pick one keyword from the task — the most specific noun
+   the user used (`jira`, `neovim`, `pdf`, …) — and call
+   `search_tools("<keyword>")`. Only the first word of `query` is matched, so
+   pass a single word. Searching first returns a small, targeted result
+   instead of the whole catalog. If no specific keyword stands out in the
+   task, skip the search and go straight to step 2.
+2. **Fall back to the full list.** If the search returns no match, call
+   `list_tools` and inspect everything. The search only matches names, so a
+   capability whose name does not contain the keyword is invisible to it —
+   the listing is the only way to find it (unless hidden by configuration).
+3. **Decide.** Read the `description` (and `type`) of each candidate and pick
+   the capability that matches the task. Prefer the narrowest capability that
+   covers what you need.
+4. **Act.** Call `enable_tool` (or `disable_tool`) with the exact `name` you
+   read from the search or the listing.
 
-Never guess a name. Never enable a capability you have not seen in `list_tools`
-or `search_tools`.
+Only use a `name` you actually saw in a `search_tools` or `list_tools` result.
+Do not invent or guess names.
+
+Exception: if the user asks for the full picture ("What tools do I have?"),
+go straight to `list_tools` — a search would not answer that.
+
+## `search_tools`
+
+- **Parameters:** `query` (string, required) — pass a single keyword; only the
+  **first word** is used. It is matched as a case-insensitive **substring**
+  against:
+  - tool group names,
+  - the names of the tools inside each group,
+  - allow-listed individual tool names.
+- Returns one block per match, in the same format as `list_tools`
+  (`name`, `type`, `attached`, `description`). For a group matched by its own
+  name the `tools:` section lists **all of its member tools**; for a group
+  matched only via its members it lists **only the member tools that
+  matched**, not the whole group.
+- If nothing matches, the result says so — that is the signal to fall back to
+  `list_tools`.
+- After a match, enable the capability with `enable_tool` using the `name`
+  from the result block.
 
 ## `list_tools`
 
-- **No parameters.**
+- **No parameters.** Use it as the fallback when `search_tools` finds nothing,
+  or whenever the user wants the full picture.
 - Returns one block per capability:
 
   ```
@@ -66,25 +95,8 @@ or `search_tools`.
   which one to enable for a given task.
 - Some capabilities are **hidden by configuration** and will never appear here:
   restricted groups and tools that are not allowed to be used on their own.
-  A name that is absent is therefore not necessarily "unknown" — it may simply
-  be unavailable to you.
-
-## `search_tools`
-
-- **Parameters:** `query` (string, required) — a free-form query.
-- Only the **first word** of `query` is used. It is matched as a
-  case-insensitive **substring** against:
-  - tool group names,
-  - the names of the tools inside each group,
-  - allow-listed individual tool names.
-- Returns one block per match, in the same format as `list_tools`
-  (`name`, `type`, `attached`, `description`). For a group matched by its own
-  name the `tools:` section lists **all of its member tools**; for a group
-  matched only via its members it lists **only the member tools that
-  matched**, not the whole group.
-- If nothing matches, the result says so and suggests `list_tools`.
-- After a match, enable the capability with `enable_tool` using the `name`
-  from the result block.
+  A name that is absent from both the search and the listing is therefore not
+  necessarily "unknown" — it may simply be unavailable to you.
 
 ## `enable_tool`
 
@@ -107,11 +119,12 @@ or `search_tools`.
 
 ### Choosing what to enable
 
-The user asks you to do something that needs a capability you do not have yet.
+The user asks for something that needs a capability you do not have yet.
 
 ```
-→ list_tools()                      → inspect `description` of each candidate
-→ enable_tool("<best match>")       → enable the narrowest capability that fits
+→ search_tools("<keyword from task>")   → candidate(s) with `description`
+→ (no match) list_tools()               → inspect all capabilities
+→ enable_tool("<best match>")           → narrowest capability that fits
 → (next turn) use its tools
 ```
 
@@ -125,7 +138,8 @@ User asks: "What tools do I have?"
 → list_tools()   → all capabilities with type, attachment and description
 ```
 
-Report what is already enabled, what is available, and what each one provides.
+No search step — the user wants the full picture. Report what is already
+enabled, what is available, and what each one provides.
 
 ### Targeted discovery
 
@@ -133,20 +147,19 @@ User asks for a specific capability and you know part of its name, e.g. "I
 need the Jira tools."
 
 ```
-→ search_tools("jira")               → matching group(s) + the member tools that matched
-→ enable_tool("<capability name>")   → enable the capability from the result block
+→ search_tools("jira")                → matching group(s) + the member tools that matched
+→ enable_tool("<capability name>")    → enable the capability from the result block
+→ (no match) list_tools()             → check for a capability named differently
 ```
-
-Prefer `search_tools` over `list_tools` when the query is narrow; use
-`list_tools` when you need the full picture.
 
 ### Enabling a group or a tool
 
 User says: "Attach the `neovim` tools."
 
 ```
-→ list_tools()            → confirm "neovim" exists and note its `type`
-→ enable_tool("neovim")   → enables it in the chat
+→ search_tools("neovim")   → confirm it exists and note its `type`
+→ (no match) list_tools()  → confirm it is really not available
+→ enable_tool("neovim")
 ```
 
 ### Disabling a group
@@ -154,8 +167,9 @@ User says: "Attach the `neovim` tools."
 User says: "Remove the `neovim` tools from this chat."
 
 ```
-→ list_tools()             → confirm "neovim" is attached and is a group
-→ disable_tool("neovim")   → disables the group
+→ search_tools("neovim")    → confirm it is attached and is a group
+→ (no match) list_tools()
+→ disable_tool("neovim")    → disables the group
 ```
 
 ### Trying to disable an individual tool
@@ -163,8 +177,8 @@ User says: "Remove the `neovim` tools from this chat."
 User says: "Remove the `subagents_research` tool."
 
 ```
-→ list_tools()                       → confirm it is `type: tool`
-→ disable_tool("subagents_research") → success, but it stays enabled
+→ search_tools("subagents_research")  → confirm it is `type: tool`
+→ disable_tool("subagents_research")  → success, but it stays enabled
 ```
 
 Tell the user that individual tools cannot be detached and remain available.
@@ -175,17 +189,20 @@ Do not retry the call.
 User asks to enable something that is not listed.
 
 ```
-→ list_tools()                 → the name is not listed
-→ enable_tool("foobar")        → returns "not available"
+→ search_tools("foobar")    → no match
+→ list_tools()              → the name is still not listed
 ```
 
-Report the error and list the valid names. Do not guess alternative names.
+Report that the capability is not available and list the valid names. Do not
+call `enable_tool` with a name you have not seen, and do not guess
+alternative names.
 
 ## Constraints
 
-1. **Always discover before acting.** Call `list_tools` (or `search_tools`
-   when you know part of a name) before `enable_tool` or `disable_tool`.
-   Never guess names.
+1. **Search before acting.** Call `search_tools` with a keyword from the task
+   before any `enable_tool` or `disable_tool`; fall back to `list_tools` only
+   if the search finds nothing. Search results are smaller and on-point, so
+   fewer irrelevant capabilities end up in context.
 
 2. **Enable for a reason.** Pick the capability whose `description` matches the
    task. Do not enable capabilities "just in case".
