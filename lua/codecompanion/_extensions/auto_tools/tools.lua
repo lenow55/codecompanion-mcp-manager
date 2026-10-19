@@ -76,8 +76,29 @@ local function get_opts()
 	return require("codecompanion._extensions.auto_tools").opts()
 end
 
+---Tools config as the chat actually sees it.
+---
+---The raw `config.interactions.chat.tools` does not include MCP tools or the
+---`mcp:<server>` groups: those are registered dynamically in `codecompanion.mcp`
+---and merged in by the tools filter, which also applies per-tool `enabled`
+---flags and prunes tools whose MCP server is not running. Listing through the
+---filtered config keeps `list_tools`/`search_tools`/`resolve_target` in sync
+---with what can actually be attached.
+---
+---Falls back to the raw config when the filter module is unavailable (e.g. the
+---extension's standalone smoke test). The filter caches per config/adapter for
+---30s, so repeated calls are cheap.
 ---@return table
 local function get_tools_config()
+	local ok, filtered = pcall(function()
+		return require("codecompanion.interactions.chat.tools.filter").filter_enabled_tools(
+			require("codecompanion.config").interactions.chat.tools,
+			{}
+		)
+	end)
+	if ok and type(filtered) == "table" then
+		return filtered
+	end
 	return require("codecompanion.config").interactions.chat.tools
 end
 
@@ -197,7 +218,15 @@ local function attach_tool(chat, tool_name)
 		return false
 	end
 	local tools_config = get_tools_config()
-	local added = chat.tool_registry:add_single_tool(tool_name, { config = tools_config[tool_name] })
+	local tool_config = tools_config[tool_name]
+	if not tool_config then
+		return false
+	end
+	-- `add_single_tool` resolves the tool itself (factory, path, callback or
+	-- inline definition) via `chat.tools.resolve`. `visible = false` keeps a
+	-- solo-attached tool out of the `@` completion context, mirroring the
+	-- `visible` option set per tool in `init.lua`.
+	local added = chat.tool_registry:add_single_tool(tool_name, { config = tool_config, visible = false })
 	log:debug("[auto_tools] attached individual tool `%s` to chat %s", tool_name, tostring(chat.id))
 	return added ~= nil
 end
@@ -328,12 +357,12 @@ function M.list_tools()
 			success = function(self, stdout, meta)
 				local chat = meta.tools.chat
 				local llm_output = vim.iter(stdout or {}):flatten():join("\n")
-				chat:add_tool_output(self, llm_output, "Tools listed")
+				chat:add_tool_output(self, { content = llm_output, display = "Tools listed" })
 			end,
 			error = function(self, stderr, meta)
 				local chat = meta.tools.chat
 				local err = vim.iter(stderr or {}):flatten():join("\n")
-				chat:add_tool_output(self, err or "Unknown error while listing tools")
+				chat:add_tool_output(self, { content = err ~= "" and err or "Unknown error while listing tools" })
 			end,
 		},
 	}
@@ -388,9 +417,7 @@ function M.search_tools()
 							-- A group found by its own name lists all of its members, so the
 							-- LLM can see what the group provides and decide; a group found
 							-- only via its members lists only the matched ones.
-							local listed_tools = group_matched
-								and vim.deepcopy(group.tools or {})
-								or matched_tools
+							local listed_tools = group_matched and vim.deepcopy(group.tools or {}) or matched_tools
 							if #listed_tools > 0 then
 								table.sort(listed_tools)
 								table.insert(lines, "tools:")
@@ -476,15 +503,18 @@ function M.search_tools()
 			success = function(self, stdout, meta)
 				local chat = meta.tools.chat
 				local llm_output = vim.iter(stdout or {}):flatten():join("\n")
-				chat:add_tool_output(self, llm_output, fmt("Searched tools for `%s`", self.args.query or "?"))
+				chat:add_tool_output(self, {
+					content = llm_output,
+					display = fmt("Searched tools for `%s`", self.args.query or "?"),
+				})
 			end,
 			error = function(self, stderr, meta)
 				local chat = meta.tools.chat
 				local err = vim.iter(stderr or {}):flatten():join("\n")
-				chat:add_tool_output(
-					self,
-					err or fmt("Unknown error while searching tools for `%s`", self.args.query or "?")
-				)
+				chat:add_tool_output(self, {
+					content = err ~= "" and err
+						or fmt("Unknown error while searching tools for `%s`", self.args.query or "?"),
+				})
 			end,
 		},
 	}
@@ -566,12 +596,17 @@ function M.enable_tool()
 			success = function(self, stdout, meta)
 				local chat = meta.tools.chat
 				local llm_output = vim.iter(stdout or {}):flatten():join("\n")
-				chat:add_tool_output(self, llm_output, fmt("`%s` enabled", self.args.name or "?"))
+				chat:add_tool_output(self, {
+					content = llm_output,
+					display = fmt("`%s` enabled", self.args.name or "?"),
+				})
 			end,
 			error = function(self, stderr, meta)
 				local chat = meta.tools.chat
 				local err = vim.iter(stderr or {}):flatten():join("\n")
-				chat:add_tool_output(self, err or fmt("Unknown error while enabling `%s`", self.args.name or "?"))
+				chat:add_tool_output(self, {
+					content = err ~= "" and err or fmt("Unknown error while enabling `%s`", self.args.name or "?"),
+				})
 			end,
 		},
 	}
@@ -661,12 +696,17 @@ function M.disable_tool()
 			success = function(self, stdout, meta)
 				local chat = meta.tools.chat
 				local llm_output = vim.iter(stdout or {}):flatten():join("\n")
-				chat:add_tool_output(self, llm_output, fmt("`%s` disabled", self.args.name or "?"))
+				chat:add_tool_output(self, {
+					content = llm_output,
+					display = fmt("`%s` disabled", self.args.name or "?"),
+				})
 			end,
 			error = function(self, stderr, meta)
 				local chat = meta.tools.chat
 				local err = vim.iter(stderr or {}):flatten():join("\n")
-				chat:add_tool_output(self, err or fmt("Unknown error while disabling `%s`", self.args.name or "?"))
+				chat:add_tool_output(self, {
+					content = err ~= "" and err or fmt("Unknown error while disabling `%s`", self.args.name or "?"),
+				})
 			end,
 		},
 	}
