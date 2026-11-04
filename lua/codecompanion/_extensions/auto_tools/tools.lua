@@ -223,10 +223,12 @@ local function attach_tool(chat, tool_name)
 		return false
 	end
 	-- `add_single_tool` resolves the tool itself (factory, path, callback or
-	-- inline definition) via `chat.tools.resolve`. `visible = false` keeps a
-	-- solo-attached tool out of the `@` completion context, mirroring the
-	-- `visible` option set per tool in `init.lua`.
-	local added = chat.tool_registry:add_single_tool(tool_name, { config = tool_config, visible = false })
+	-- inline definition) via `chat.tools.resolve`. `visible = true` renders a
+	-- context line in the prompt, which is what `check_context` reconciles
+	-- against on every user submission; a `visible = false` item is never
+	-- rendered, so the tool would be pruned from the registry after the first
+	-- manual submit and the LLM could no longer call it.
+	local added = chat.tool_registry:add_single_tool(tool_name, { config = tool_config, visible = true })
 	log:debug("[auto_tools] attached individual tool `%s` to chat %s", tool_name, tostring(chat.id))
 	return added ~= nil
 end
